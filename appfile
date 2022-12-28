@@ -1,0 +1,96 @@
+const express = require("express");
+const app = express();
+const axios = require("axios");
+const _ = require('lodash');
+var cron = require('node-cron');
+const moment = require("moment");
+
+app.listen(3000, () => {
+	console.log("Server started at port 3000");
+});
+
+cron.schedule('0 * * * *', async () => {
+        console.log(`${moment().format()}`);
+        let responses = [];
+        let response = await checkOi({symbol:'NIFTY'});
+        response ? responses.push(response) : '';
+});
+
+
+app.get("/checkoi", async (req, res) => {
+	try {
+        let responses = [];
+        let response = await checkOi();
+        response ? responses.push(response) : '';
+        res.status(200).json(responses);
+	} catch (err) {
+        console.log(err);
+		res.status(500).json({ message: err });
+	}
+});
+
+async function checkOi(){
+    let symbol = 'NIFTY';
+    let from = moment().add(-15,'minutes').format('HH:mm');
+    let to = moment().format('HH:mm');
+    console.log(`${from} to ${to}`);
+    from = from.toString().replace(":",'%3A');
+    to = to.toString().replace(":",'%3A');
+    var now = new Date();
+    let timeTicks = ((now.getTime() * 10000) + 621355968000000000);
+    const query = 
+    `symbol=${symbol}&snapShotDateTimeTicks=${timeTicks}&fromDate=${from}&toDate=${to}&expDate=29+Dec+2022&changeInOI=True`
+    const response = await axios.post("https://niftyoidata.com/oi/getoibydaterange",
+          query
+        );
+    const data = response?.data;
+    const calls = _.orderBy(data?.Calls,['y'],['desc']);
+    const puts = _.orderBy(data?.Puts,['y'],['desc']);
+    let sendData = null;
+    if(calls[0]?.x == puts[puts?.length-1]?.x && puts[puts?.length-1]?.y < 0 && puts[puts?.length-1]?.y < calls[calls.length-1]?.y)
+    {
+        target = 0;
+        if(calls[0]?.y>(puts[puts?.length-1]?.y*-1))
+        {
+            target = _.ceil((calls[0]?.y/puts[puts?.length-1]?.y)*-10)+1;
+        }
+        else
+        {
+            target = _.ceil((puts[puts?.length-1]?.y/calls[0]?.y)*-10)+1;
+        }
+        sendData = {
+            symbol,
+            strike:calls[0]?.x,
+            buySide:"PE",
+            ceFresh:calls[0]?.y,
+            peWindUp:puts[puts?.length-1]?.y,
+            target:`${target}%`,
+            stopLoss:`${_.ceil(target/2.5)}%`
+        }
+    }
+    else if(puts[0]?.x == calls[calls?.length-1]?.x && calls[calls?.length-1]?.y < 0 && calls[calls?.length-1]?.y < puts[puts?.length]?.y)
+    {
+        target = 0;
+        if(puts[0]?.y>(calls[calls?.length-1]?.y*-1))
+        {
+            target = _.ceil((puts[0]?.y/calls[calls?.length-1]?.y)*-10)+1;
+        }
+        else
+        {
+            target = _.ceil((calls[puts?.length-1]?.y/puts[0]?.y)*-10)+1;
+        }
+        sendData = {
+            symbol,
+            strike:puts[0]?.x,
+            buySide:"CE",
+            peFresh:puts[0]?.y,
+            ceWindUp:calls[calls?.length-1]?.y,
+            target:`${target}%`,
+            stopLoss:`${_.ceil(target/2.5)}%`
+        }
+    }
+    if(sendData){
+        console.log(sendData);
+    }
+    return sendData;
+}
